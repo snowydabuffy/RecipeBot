@@ -1,0 +1,87 @@
+from botbuilder.core import BotFrameworkAdapter, TurnContext, ActivityHandler, ConversationState, MemoryStorage
+from botbuilder.schema import Activity
+from botbuilder.ai.luis import LuisApplication, LuisPredictionOptions, LuisRecognizer
+from botbuilder.core.integration import aiohttp_error_middleware
+from typing import List
+import aiohttp
+import asyncio
+import os
+
+# Replace these values with your own LUIS application ID and key
+LUIS_APP_ID = os.environ.get('LuisAppId')
+LUIS_API_KEY = os.environ.get('LuisAPIKey')
+LUIS_API_HOST_NAME = os.environ.get('LuisAPIHostName')
+
+luis_app = LuisApplication(LUIS_APP_ID, LUIS_API_KEY, "https://" + LUIS_API_HOST_NAME)
+
+# Set the recognizer options
+# These correspond to application-specific parameters
+LUIS_RECOGNIZER_OPTIONS = LuisPredictionOptions(include_all_intents=True, include_instance_data=True)
+
+# Create the recognizer
+recognizer = LuisRecognizer(luis_app, prediction_options=LUIS_RECOGNIZER_OPTIONS)
+
+# Define the bot class
+class RecipeBot(ActivityHandler):
+    def __init__(self, conversation_state: ConversationState):
+        self.conversation_state = conversation_state
+
+    async def on_message_activity(self, turn_context: TurnContext):
+        # Get the user's message
+        message_text = turn_context.activity.text
+
+        # Call LUIS and get the top scoring intent
+        results = await recognizer.recognize(turn_context)
+        top_intent = results.get_top_scoring_intent()
+
+        # Handle the intent based on its name
+        if top_intent.intent == 'FindRecipes':
+            ingredients = self.get_ingredients(results.entities['Ingredients'])
+            recipes = self.find_recipes(ingredients)
+            await turn_context.send_activity(recipes)
+
+    def get_ingredients(self, entities: List[str]) -> List[str]:
+        return [entity['text'] for entity in entities]
+
+    def find_recipes(self, ingredients: List[str]) -> str:
+        # This is where you would add your recipe-finding logic
+        # For the sake of simplicity, we'll just return a hardcoded string
+        return "Here are some recipes you can make with " + ", ".join(ingredients)
+
+# Create the adapter
+adapter = BotFrameworkAdapter("YourBotFrameworkAppId", "YourBotFrameworkAppPassword")
+
+# Define the storage
+storage = MemoryStorage()
+
+# Define the conversation state
+conversation_state = ConversationState(storage)
+
+# Create the bot instance
+bot = RecipeBot(conversation_state)
+
+# Define the endpoint route
+async def endpoint(req: aiohttp.web.Request) -> aiohttp.web.Response:
+    # Convert the request to an activity
+    activity = Activity().deserialize(await req.text())
+
+    # Process the activity with the bot
+    response = await adapter.process_activity(activity, conversation_state.create_property("DialogState"), bot.on_turn)
+
+    # Convert the bot's response to a web response
+    if response:
+        return aiohttp.web.Response(
+            body=response.body,
+            status=response.status,
+            headers=response.headers)
+
+# Create the app and add the endpoint route
+app = aiohttp.web.Application(middlewares=[])
+app.router.add_post("/api/messages", endpoint)
+
+# Start the server
+if __name__ == '__main__':
+    try:
+        web.run_app(app, host="localhost", port=3978)
+    except Exception as e:
+        raise e
